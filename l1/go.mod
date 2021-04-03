@@ -1,4 +1,4 @@
-module github.com/kilchik/gb/lesson1
+module github.com/emorikvendy/gb/lesson1
 
 go 1.15
 
