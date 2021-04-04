@@ -26,50 +26,54 @@ func parse(url string, requestTimeout int) (*html.Node, error) {
 }
 
 // ищем заголовок на странице
-func pageTitle(n *html.Node, ctx context.Context) string {
+func pageTitle(ctx context.Context, n *html.Node) (string, error) {
 	select {
 	case <-ctx.Done():
-		return ""
+		return "", fmt.Errorf("parsing the header took too long")
 	default:
 		var title string
 		if n.Type == html.ElementNode && n.Data == "title" {
-			return n.FirstChild.Data
+			return n.FirstChild.Data, nil
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			title := pageTitle(c, ctx)
+			title, err := pageTitle(ctx, c)
+			if err != nil {
+				return title, err
+			}
 			if title != "" {
 				break
 			}
 		}
-		return title
+		return title, nil
 	}
 }
 
 // ищем все ссылки на страницы. Используем мапку чтобы избежать дубликатов
-func pageLinks(links map[string]struct{}, n *html.Node, ctx context.Context) map[string]struct{} {
+func pageLinks(ctx context.Context, links map[string]struct{}, n *html.Node) (map[string]struct{}, error) {
 	if links == nil {
 		links = make(map[string]struct{})
 	}
 	select {
 	case <-ctx.Done():
-		return links
-
+		return nil, fmt.Errorf("fetching links took too long")
 	default:
+		var err error
 		if n.Type == html.ElementNode && n.Data == "a" {
 			for _, a := range n.Attr {
 				if a.Key != "href" {
 					continue
 				}
-
-				// костылик для простоты
 				if _, ok := links[a.Val]; !ok && len(a.Val) > 2 && a.Val[:2] == "//" {
 					links["http://"+a.Val[2:]] = struct{}{}
 				}
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			links = pageLinks(links, c, ctx)
+			links, err = pageLinks(ctx, links, c)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return links
+		return links, nil
 	}
 }

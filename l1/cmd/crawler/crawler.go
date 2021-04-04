@@ -45,65 +45,68 @@ func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResul
 	if depth == 0 {
 		defer func() {
 			wg.Wait()
-			log.Printf("exit url: %s OK", url)
 			done <- struct{}{}
 			close(done)
 		}()
 	} else {
 		defer func() {
-			log.Printf("exit url: %s OK", url)
 			wg.Done()
 		}()
 	}
-	log.Printf("start url: %s", url)
 	// просто для того, чтобы успевать следить за выводом программы, можно убрать :)
-	time.Sleep(20 * time.Second)
+	time.Sleep(2 * time.Second)
 	localCtx, localCancel := context.WithTimeout(context.Background(), time.Duration(c.pageTimeout)*time.Second)
 	defer localCancel()
 	// проверяем что контекст исполнения актуален
 	select {
 	case <-ctx.Done():
-		log.Printf("exit url: %s ctx.Done", url)
 		return
 
 	default:
 		// проверка глубины
 		if depth >= c.maxDepth {
-			log.Printf("exit url: %s depth %d >= %d", url, depth, c.maxDepth)
 			return
 		}
 
 		page, err := parse(url, c.requestTimeout)
 		if err != nil {
-			// ошибку отправляем в канал, а не обрабатываем на месте
 			results <- crawlResult{
 				err: errors.Wrapf(err, "parse page %s", url),
 			}
-			log.Printf("exit url: %s err", url)
 			return
 		}
 		select {
 		case <-localCtx.Done():
-			log.Printf("exit url: %s localCtx.Done", url)
 			return
 		default:
 		}
 
 		hCtx, hCancel := context.WithTimeout(context.Background(), time.Duration(c.headerTimeout)*time.Second)
-		title := pageTitle(page, hCtx)
-		hCancel()
+		defer hCancel()
+		title, err := pageTitle(hCtx, page)
+		if err != nil {
+			results <- crawlResult{
+				err: errors.Wrapf(err, "parse page %s", url),
+			}
+			return
+		}
 		select {
 		case <-localCtx.Done():
-			log.Printf("exit url: %s localCtx.Done", url)
 			return
 		default:
 		}
 		lCtx, lCancel := context.WithTimeout(context.Background(), time.Duration(c.linksTimeout)*time.Second)
-		links := pageLinks(nil, page, lCtx)
+		defer lCancel()
+		links, err := pageLinks(lCtx, nil, page)
+		if err != nil {
+			results <- crawlResult{
+				err: errors.Wrapf(err, "parse page %s", url),
+			}
+			return
+		}
 		lCancel()
 		select {
 		case <-localCtx.Done():
-			log.Printf("exit url: %s localCtx.Done", url)
 			return
 		default:
 		}
@@ -121,7 +124,6 @@ func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResul
 
 		select {
 		case <-localCtx.Done():
-			log.Printf("exit url: %s localCtx.Done", url)
 			return
 		default:
 		}
