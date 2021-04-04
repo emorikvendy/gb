@@ -32,11 +32,12 @@ func pageTitle(ctx context.Context, n *html.Node) (string, error) {
 		return "", fmt.Errorf("parsing the header took too long")
 	default:
 		var title string
+		var err error
 		if n.Type == html.ElementNode && n.Data == "title" {
 			return n.FirstChild.Data, nil
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			title, err := pageTitle(ctx, c)
+			title, err = pageTitle(ctx, c)
 			if err != nil {
 				return title, err
 			}
