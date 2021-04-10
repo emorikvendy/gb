@@ -6,6 +6,7 @@ import (
 	"github.com/pkg/errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,7 +18,7 @@ type crawlResult struct {
 type crawler struct {
 	sync.Mutex
 	visited        map[string]string
-	maxDepth       int
+	maxDepth       int64
 	pageTimeout    int
 	linksTimeout   int
 	headerTimeout  int
@@ -27,7 +28,7 @@ type crawler struct {
 func newCrawler(maxDepth, pageTimeout, linksTimeout, headerTimeout, requestTimeout int) *crawler {
 	return &crawler{
 		visited:        make(map[string]string),
-		maxDepth:       maxDepth,
+		maxDepth:       int64(maxDepth),
 		pageTimeout:    pageTimeout,
 		linksTimeout:   linksTimeout,
 		headerTimeout:  headerTimeout,
@@ -35,15 +36,14 @@ func newCrawler(maxDepth, pageTimeout, linksTimeout, headerTimeout, requestTimeo
 	}
 }
 
-func (c *crawler) increaseDepth(value int) {
-	c.Mutex.Lock()
-	c.maxDepth += value
-	log.Printf("current depth is %d", c.maxDepth)
-	c.Mutex.Unlock()
+func (c *crawler) increaseDepth(value int64) {
+	atomic.AddInt64(&c.maxDepth, value)
+	//c.maxDepth += value
+	log.Printf("current depth is %d", atomic.LoadInt64(&c.maxDepth))
 }
 
 // рекурсивно сканируем страницы
-func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResult, done chan struct{}, wg *sync.WaitGroup, depth int) {
+func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResult, done chan struct{}, wg *sync.WaitGroup, depth int64) {
 	if depth == 0 {
 		defer func() {
 			wg.Wait()
@@ -66,12 +66,9 @@ func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResul
 
 	default:
 		// проверка глубины
-		c.Mutex.Lock()
-		if depth >= c.maxDepth {
-			c.Mutex.Unlock()
+		if depth >= atomic.LoadInt64(&c.maxDepth) {
 			return
 		}
-		c.Mutex.Unlock()
 
 		page, err := parse(url, c.requestTimeout)
 		if err != nil {
