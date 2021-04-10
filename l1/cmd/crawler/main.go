@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -23,7 +24,12 @@ var (
 	url string
 
 	// насколько глубоко нам надо смотреть (например, 10)
-	depthLimit int
+	depthLimit     int
+	parserTimeout  int
+	pageTimeout    int
+	linksTimeout   int
+	headerTimeout  int
+	requestTimeout int
 )
 
 // Как вы помните, функция инициализации стартует первой
@@ -31,6 +37,11 @@ func init() {
 	// задаём и парсим флаги
 	flag.StringVar(&url, "url", "", "url address")
 	flag.IntVar(&depthLimit, "depth", 3, "max depth for run")
+	flag.IntVar(&parserTimeout, "parser_timeout", 240, "max processing time")
+	flag.IntVar(&pageTimeout, "page_timeout", 60, "max processing time for one page")
+	flag.IntVar(&linksTimeout, "links_timeout", 20, "max search time for links on one page")
+	flag.IntVar(&headerTimeout, "request_timeout", 20, "max search time for a title on one page")
+	flag.IntVar(&requestTimeout, "header_timeout", 15, "max load time of one page")
 	flag.Parse()
 
 	// Проверяем обязательное условие
@@ -44,21 +55,25 @@ func init() {
 func main() {
 	started := time.Now()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go watchSignals(cancel)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(parserTimeout)*time.Second)
 
-	crawler := newCrawler(depthLimit)
+	crawler := newCrawler(depthLimit, pageTimeout, linksTimeout, headerTimeout, requestTimeout)
+
+	go watchSignals(cancel, crawler)
+	defer cancel()
 
 	// создаём канал для результатов
 	results := make(chan crawlResult)
+	// создаём канал для результатов
+	doneCh := make(chan struct{}, 1)
 
 	// запускаем горутину для чтения из каналов
-	done := watchCrawler(ctx, results, errorsLimit, resultsLimit)
+	done := watchCrawler(ctx, results, doneCh, errorsLimit, resultsLimit)
 
 	// запуск основной логики
 	// внутри есть рекурсивные запуски анализа в других горутинах
-	crawler.run(ctx, url, results, 0)
+	wg := sync.WaitGroup{}
+	crawler.run(ctx, url, results, doneCh, &wg, 0)
 
 	// ждём завершения работы чтения в своей горутине
 	<-done
@@ -67,28 +82,35 @@ func main() {
 }
 
 // ловим сигналы выключения
-func watchSignals(cancel context.CancelFunc) {
+func watchSignals(cancel context.CancelFunc, crawler *crawler) {
 	osSignalChan := make(chan os.Signal)
 
-	signal.Notify(osSignalChan,
-		syscall.SIGINT,
-		syscall.SIGTERM)
-
-	sig := <-osSignalChan
-	log.Printf("got signal %q", sig.String())
-
-	// если сигнал получен, отменяем контекст работы
+	signal.Notify(osSignalChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
+	for {
+		sig := <-osSignalChan
+		log.Printf("got signal %+v", sig)
+		if sig == syscall.SIGUSR1 {
+			crawler.increaseDepth(10)
+		} else {
+			log.Printf("got signal %q", sig.String())
+			break
+		}
+	}
 	cancel()
 }
 
-func watchCrawler(ctx context.Context, results <-chan crawlResult, maxErrors, maxResults int) chan struct{} {
-	readersDone := make(chan struct{})
+func watchCrawler(ctx context.Context, results <-chan crawlResult, done chan struct{}, maxErrors, maxResults int) chan struct{} {
+	readersDone := make(chan struct{}, 1)
 
 	go func() {
-		defer close(readersDone)
+		defer func() {
+			readersDone <- struct{}{}
+			close(readersDone)
+		}()
 		for {
 			select {
 			case <-ctx.Done():
+				log.Println("ctx.Done")
 				return
 
 			case result := <-results:
@@ -107,6 +129,9 @@ func watchCrawler(ctx context.Context, results <-chan crawlResult, maxErrors, ma
 					log.Println("got max results")
 					return
 				}
+			case <-done:
+				log.Println("done")
+				return
 			}
 		}
 	}()
