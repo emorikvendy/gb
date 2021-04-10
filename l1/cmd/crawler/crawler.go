@@ -36,8 +36,10 @@ func newCrawler(maxDepth, pageTimeout, linksTimeout, headerTimeout, requestTimeo
 }
 
 func (c *crawler) increaseDepth(value int) {
+	c.Mutex.Lock()
 	c.maxDepth += value
 	log.Printf("current depth is %d", c.maxDepth)
+	c.Mutex.Unlock()
 }
 
 // рекурсивно сканируем страницы
@@ -64,9 +66,12 @@ func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResul
 
 	default:
 		// проверка глубины
+		c.Mutex.Lock()
 		if depth >= c.maxDepth {
+			c.Mutex.Unlock()
 			return
 		}
+		c.Mutex.Unlock()
 
 		page, err := parse(url, c.requestTimeout)
 		if err != nil {
